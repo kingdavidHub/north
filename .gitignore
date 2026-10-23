@@ -31,7 +31,12 @@ yarn-error.*
 *.pem
 
 # local env files
-.env*.local
+.env
+.env.*
+!.env.example
+
+# Prisma generated client
+apps/api/src/generated/
 
 # typescript
 *.tsbuildinfo

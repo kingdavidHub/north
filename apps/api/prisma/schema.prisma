@@ -1,0 +1,593 @@
+// NORTH — PostgreSQL schema
+//
+// Money is stored in the currency's minor unit (kobo for NGN) as BigInt.
+// Never use floating point values for balances or amounts.
+//
+// The ledger is double-entry: every completed money movement has a
+// Transaction header plus two or more LedgerEntry rows whose debits and
+// credits net to zero. Account.ledgerBalance / availableBalance are cached
+// projections maintained inside the same database transaction as the entries.
+
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  moduleFormat        = "cjs"
+  importFileExtension = "ts"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Identity
+// ---------------------------------------------------------------------------
+
+enum UserStatus {
+  PENDING_VERIFICATION
+  ACTIVE
+  SUSPENDED
+  CLOSED
+}
+
+enum KycStatus {
+  UNVERIFIED
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+model User {
+  id                String     @id @default(cuid())
+  /// Stored lower-cased. Login accepts either email or phone.
+  email             String?    @unique @db.VarChar(320)
+  /// E.164 format, e.g. +2348012345678.
+  phone             String?    @unique @db.VarChar(20)
+  passwordHash      String?
+  firstName         String     @db.VarChar(100)
+  lastName          String     @db.VarChar(100)
+  displayName       String?    @db.VarChar(120)
+  dateOfBirth       DateTime?  @db.Date
+  avatarUrl         String?    @db.VarChar(2048)
+  status            UserStatus @default(PENDING_VERIFICATION)
+  kycStatus         KycStatus  @default(UNVERIFIED)
+  emailVerifiedAt   DateTime?  @db.Timestamptz(3)
+  phoneVerifiedAt   DateTime?  @db.Timestamptz(3)
+  /// Hashed app passcode. Never store the passcode itself.
+  passcodeHash      String?
+  /// Hashed 4–6 digit transaction PIN. Never store the PIN itself.
+  pinHash           String?
+  biometricsEnabled Boolean    @default(false)
+  lastLoginAt       DateTime?  @db.Timestamptz(3)
+  createdAt         DateTime   @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime   @updatedAt @db.Timestamptz(3)
+  deletedAt         DateTime?  @db.Timestamptz(3)
+
+  accounts                Account[]
+  cards                   Card[]
+  recipients              Recipient[]             @relation("RecipientOwner")
+  northRecipients         Recipient[]             @relation("RecipientNorthUser")
+  transactions            Transaction[]           @relation("TransactionInitiator")
+  categories              Category[]
+  budgets                 Budget[]
+  billPayments            BillPayment[]
+  paymentRequests         PaymentRequest[]        @relation("PaymentRequestRequester")
+  incomingPaymentRequests PaymentRequest[]        @relation("PaymentRequestPayer")
+  linkedBankAccounts      LinkedBankAccount[]
+  notificationPreference  NotificationPreference?
+  sessions                UserSession[]
+
+  @@index([status])
+  @@index([deletedAt])
+}
+
+model UserSession {
+  id               String    @id @default(cuid())
+  userId           String
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Hash of the refresh token, never the raw token.
+  refreshTokenHash String    @unique @db.VarChar(128)
+  deviceId         String?   @db.VarChar(120)
+  deviceName       String?   @db.VarChar(120)
+  platform         String?   @db.VarChar(40)
+  appVersion       String?   @db.VarChar(40)
+  ipAddress        String?   @db.VarChar(45)
+  userAgent        String?   @db.VarChar(512)
+  expiresAt        DateTime  @db.Timestamptz(3)
+  lastUsedAt       DateTime? @db.Timestamptz(3)
+  revokedAt        DateTime? @db.Timestamptz(3)
+  createdAt        DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime  @updatedAt @db.Timestamptz(3)
+
+  @@index([userId, revokedAt])
+  @@index([expiresAt])
+}
+
+model NotificationPreference {
+  id                String   @id @default(cuid())
+  userId            String   @unique
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  pushEnabled       Boolean  @default(true)
+  emailEnabled      Boolean  @default(true)
+  smsEnabled        Boolean  @default(false)
+  transactionAlerts Boolean  @default(true)
+  securityAlerts    Boolean  @default(true)
+  productUpdates    Boolean  @default(false)
+  marketing         Boolean  @default(false)
+  createdAt         DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime @updatedAt @db.Timestamptz(3)
+}
+
+// ---------------------------------------------------------------------------
+// Accounts, cards and ledger
+// ---------------------------------------------------------------------------
+
+enum AccountType {
+  MAIN
+  SAVINGS
+  VIRTUAL
+  WALLET
+  /// Internal system account used to balance external money movements.
+  SETTLEMENT
+}
+
+enum AccountStatus {
+  ACTIVE
+  FROZEN
+  CLOSED
+}
+
+model Account {
+  id               String        @id @default(cuid())
+  /// Null only for internal system accounts (settlement, fees, etc.).
+  userId           String?
+  user             User?         @relation(fields: [userId], references: [id], onDelete: Restrict)
+  type             AccountType   @default(MAIN)
+  name             String        @db.VarChar(120)
+  accountNumber    String        @unique @db.VarChar(20)
+  currency         String        @default("NGN") @db.VarChar(3)
+  status           AccountStatus @default(ACTIVE)
+  /// Cached projection of all posted ledger entries. Minor units.
+  ledgerBalance    BigInt        @default(0)
+  /// ledgerBalance minus active holds. Minor units.
+  availableBalance BigInt        @default(0)
+  /// Optimistic-lock counter incremented with every balance update.
+  balanceVersion   Int           @default(0)
+  isPrimary        Boolean       @default(false)
+  openedAt         DateTime      @default(now()) @db.Timestamptz(3)
+  closedAt         DateTime?     @db.Timestamptz(3)
+  createdAt        DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime      @updatedAt @db.Timestamptz(3)
+
+  cards   Card[]
+  entries LedgerEntry[]
+  holds   AccountHold[]
+
+  @@index([userId, status])
+  @@index([type, status])
+}
+
+enum CardType {
+  DEBIT
+  VIRTUAL
+  TRAVEL
+}
+
+enum CardBrand {
+  VISA
+  MASTERCARD
+  VERVE
+}
+
+enum CardStatus {
+  ACTIVE
+  FROZEN
+  EXPIRED
+  CANCELLED
+}
+
+model Card {
+  id                    String     @id @default(cuid())
+  userId                String
+  user                  User       @relation(fields: [userId], references: [id], onDelete: Restrict)
+  accountId             String
+  account               Account    @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  type                  CardType
+  brand                 CardBrand
+  name                  String     @db.VarChar(80)
+  cardholderName        String     @db.VarChar(120)
+  /// Only the last four digits are stored. Never store full PAN or CVV.
+  last4                 String     @db.VarChar(4)
+  expiryMonth           Int
+  expiryYear            Int
+  status                CardStatus @default(ACTIVE)
+  isPrimary             Boolean    @default(false)
+  /// Issuer/processor token used for operations. No card number is stored.
+  processorToken        String?    @unique @db.VarChar(255)
+  fingerprint           String?    @db.VarChar(255)
+  onlinePaymentsEnabled Boolean    @default(true)
+  atmWithdrawalsEnabled Boolean    @default(true)
+  contactlessEnabled    Boolean    @default(true)
+  internationalEnabled  Boolean    @default(false)
+  /// Optional daily limit. Minor units.
+  dailySpendLimit       BigInt?
+  frozenAt              DateTime?  @db.Timestamptz(3)
+  cancelledAt           DateTime?  @db.Timestamptz(3)
+  createdAt             DateTime   @default(now()) @db.Timestamptz(3)
+  updatedAt             DateTime   @updatedAt @db.Timestamptz(3)
+
+  transactions Transaction[]
+
+  @@index([userId, status])
+  @@index([accountId])
+}
+
+enum TransactionType {
+  DEPOSIT
+  WITHDRAWAL
+  TRANSFER
+  CARD_PAYMENT
+  BILL_PAYMENT
+  AIRTIME
+  REFUND
+  FEE
+  REVERSAL
+  ADJUSTMENT
+}
+
+enum TransactionStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+  REVERSED
+  EXPIRED
+}
+
+enum LedgerEntryDirection {
+  DEBIT
+  CREDIT
+}
+
+model Transaction {
+  id                String            @id @default(cuid())
+  /// Customer-facing reference shown on receipts, e.g. NR-2048-7712-AX.
+  reference         String            @unique @db.VarChar(40)
+  externalReference String?           @db.VarChar(120)
+  /// Client-supplied key that prevents duplicate money movements.
+  idempotencyKey    String?           @unique @db.VarChar(120)
+  type              TransactionType
+  status            TransactionStatus @default(PENDING)
+  /// Principal amount in minor units. Fee is tracked separately.
+  amount            BigInt
+  fee               BigInt            @default(0)
+  currency          String            @default("NGN") @db.VarChar(3)
+  description       String?           @db.VarChar(255)
+  note              String?           @db.VarChar(500)
+
+  initiatorUserId String
+  initiator       User       @relation("TransactionInitiator", fields: [initiatorUserId], references: [id], onDelete: Restrict)
+  categoryId      String?
+  category        Category?  @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  cardId          String?
+  card            Card?      @relation(fields: [cardId], references: [id], onDelete: SetNull)
+  recipientId     String?
+  recipient       Recipient? @relation(fields: [recipientId], references: [id], onDelete: SetNull)
+
+  /// Immutable snapshots so history survives recipient edits or deletion.
+  counterpartyName          String? @db.VarChar(120)
+  counterpartyAccountNumber String? @db.VarChar(20)
+  counterpartyBankName      String? @db.VarChar(120)
+  merchantName              String? @db.VarChar(120)
+  merchantLocation          String? @db.VarChar(160)
+
+  failureCode    String?   @db.VarChar(60)
+  failureMessage String?   @db.VarChar(500)
+  authorizedAt   DateTime? @db.Timestamptz(3)
+  completedAt    DateTime? @db.Timestamptz(3)
+  failedAt       DateTime? @db.Timestamptz(3)
+  reversedAt     DateTime? @db.Timestamptz(3)
+  metadata       Json?
+  createdAt      DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime  @updatedAt @db.Timestamptz(3)
+
+  entries        LedgerEntry[]
+  holds          AccountHold[]
+  billPayment    BillPayment?
+  paymentRequest PaymentRequest?
+
+  @@index([initiatorUserId, createdAt(sort: Desc)])
+  @@index([initiatorUserId, status, createdAt(sort: Desc)])
+  @@index([status, createdAt(sort: Desc)])
+  @@index([type, createdAt(sort: Desc)])
+  @@index([categoryId, createdAt(sort: Desc)])
+  @@index([cardId])
+  @@index([recipientId])
+  @@index([externalReference])
+}
+
+model LedgerEntry {
+  id            String               @id @default(cuid())
+  transactionId String
+  transaction   Transaction          @relation(fields: [transactionId], references: [id], onDelete: Restrict)
+  accountId     String
+  account       Account              @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  direction     LedgerEntryDirection
+  /// Always positive. Minor units.
+  amount        BigInt
+  currency      String               @default("NGN") @db.VarChar(3)
+  /// Account balance immediately after this entry, for statements.
+  balanceAfter  BigInt?
+  /// Ordering of entries within a transaction.
+  sequence      Int
+  createdAt     DateTime             @default(now()) @db.Timestamptz(3)
+
+  @@unique([transactionId, sequence])
+  @@index([accountId, createdAt(sort: Desc)])
+  @@index([transactionId])
+}
+
+enum AccountHoldStatus {
+  ACTIVE
+  RELEASED
+  CAPTURED
+  EXPIRED
+  CANCELLED
+}
+
+model AccountHold {
+  id            String            @id @default(cuid())
+  accountId     String
+  account       Account           @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  transactionId String?
+  transaction   Transaction?      @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+  /// Reserved amount in minor units.
+  amount        BigInt
+  currency      String            @default("NGN") @db.VarChar(3)
+  status        AccountHoldStatus @default(ACTIVE)
+  reason        String?           @db.VarChar(255)
+  expiresAt     DateTime?         @db.Timestamptz(3)
+  releasedAt    DateTime?         @db.Timestamptz(3)
+  createdAt     DateTime          @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime          @updatedAt @db.Timestamptz(3)
+
+  @@index([accountId, status])
+  @@index([transactionId])
+  @@index([status, expiresAt])
+}
+
+// ---------------------------------------------------------------------------
+// Recipients and linked funding accounts
+// ---------------------------------------------------------------------------
+
+enum RecipientType {
+  BANK_ACCOUNT
+  NORTH_USER
+}
+
+model Recipient {
+  id              String        @id @default(cuid())
+  userId          String
+  user            User          @relation("RecipientOwner", fields: [userId], references: [id], onDelete: Cascade)
+  type            RecipientType @default(BANK_ACCOUNT)
+  name            String        @db.VarChar(120)
+  nickname        String?       @db.VarChar(80)
+  bankName        String?       @db.VarChar(120)
+  bankCode        String?       @db.VarChar(20)
+  accountNumber   String?       @db.VarChar(20)
+  accountName     String?       @db.VarChar(120)
+  /// Set when the recipient is another NORTH user.
+  recipientUserId String?
+  recipientUser   User?         @relation("RecipientNorthUser", fields: [recipientUserId], references: [id], onDelete: SetNull)
+  isFavorite      Boolean       @default(false)
+  /// Avatar/initials colour used by the mobile UI.
+  color           String?       @db.VarChar(20)
+  lastUsedAt      DateTime?     @db.Timestamptz(3)
+  createdAt       DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime      @updatedAt @db.Timestamptz(3)
+  deletedAt       DateTime?     @db.Timestamptz(3)
+
+  transactions    Transaction[]
+  paymentRequests PaymentRequest[]
+
+  @@unique([userId, type, bankCode, accountNumber])
+  @@unique([userId, recipientUserId])
+  @@index([userId, deletedAt])
+  @@index([userId, isFavorite, lastUsedAt])
+  @@index([recipientUserId])
+}
+
+enum LinkedAccountStatus {
+  PENDING
+  ACTIVE
+  REVOKED
+}
+
+model LinkedBankAccount {
+  id                String              @id @default(cuid())
+  userId            String
+  user              User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bankName          String              @db.VarChar(120)
+  bankCode          String              @db.VarChar(20)
+  accountNumber     String              @db.VarChar(20)
+  accountName       String              @db.VarChar(120)
+  currency          String              @default("NGN") @db.VarChar(3)
+  status            LinkedAccountStatus @default(PENDING)
+  isPrimary         Boolean             @default(false)
+  providerReference String?             @db.VarChar(255)
+  verifiedAt        DateTime?           @db.Timestamptz(3)
+  lastSyncedAt      DateTime?           @db.Timestamptz(3)
+  createdAt         DateTime            @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime            @updatedAt @db.Timestamptz(3)
+  deletedAt         DateTime?           @db.Timestamptz(3)
+
+  @@unique([userId, bankCode, accountNumber])
+  @@index([userId, status])
+}
+
+// ---------------------------------------------------------------------------
+// Budgeting
+// ---------------------------------------------------------------------------
+
+enum CategoryKind {
+  INCOME
+  EXPENSE
+  TRANSFER
+}
+
+model Category {
+  id         String       @id @default(cuid())
+  userId     String
+  user       User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name       String       @db.VarChar(80)
+  /// Stable key such as "food-groceries" or "income".
+  slug       String       @db.VarChar(80)
+  kind       CategoryKind @default(EXPENSE)
+  icon       String?      @db.VarChar(80)
+  color      String?      @db.VarChar(20)
+  sortOrder  Int          @default(0)
+  isArchived Boolean      @default(false)
+  createdAt  DateTime     @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime     @updatedAt @db.Timestamptz(3)
+
+  transactions      Transaction[]
+  budgetAllocations BudgetCategory[]
+
+  @@unique([userId, slug])
+  @@index([userId, kind, isArchived])
+}
+
+enum BudgetPeriod {
+  WEEKLY
+  MONTHLY
+  CUSTOM
+}
+
+model Budget {
+  id          String       @id @default(cuid())
+  userId      String
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name        String       @default("Monthly budget") @db.VarChar(80)
+  period      BudgetPeriod @default(MONTHLY)
+  periodStart DateTime     @db.Date
+  /// Exclusive end date.
+  periodEnd   DateTime     @db.Date
+  currency    String       @default("NGN") @db.VarChar(3)
+  /// Overall cap for the period. Minor units.
+  totalLimit  BigInt
+  isActive    Boolean      @default(true)
+  createdAt   DateTime     @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime     @updatedAt @db.Timestamptz(3)
+
+  categories BudgetCategory[]
+
+  @@unique([userId, periodStart, periodEnd])
+  @@index([userId, periodStart(sort: Desc)])
+}
+
+model BudgetCategory {
+  id          String   @id @default(cuid())
+  budgetId    String
+  budget      Budget   @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+  categoryId  String
+  category    Category @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  /// Category cap for this budget period. Minor units.
+  limitAmount BigInt
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([budgetId, categoryId])
+  @@index([categoryId])
+}
+
+// ---------------------------------------------------------------------------
+// Bills and payment requests
+// ---------------------------------------------------------------------------
+
+enum BillerCategory {
+  AIRTIME
+  DATA
+  ELECTRICITY
+  CABLE_TV
+  INTERNET
+  WATER
+  EDUCATION
+  OTHER
+}
+
+model Biller {
+  id        String         @id @default(cuid())
+  name      String         @db.VarChar(120)
+  slug      String         @unique @db.VarChar(80)
+  category  BillerCategory
+  logoUrl   String?        @db.VarChar(2048)
+  isActive  Boolean        @default(true)
+  sortOrder Int            @default(0)
+  createdAt DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime       @updatedAt @db.Timestamptz(3)
+
+  billPayments BillPayment[]
+
+  @@index([category, isActive])
+}
+
+model BillPayment {
+  id                String      @id @default(cuid())
+  userId            String
+  user              User        @relation(fields: [userId], references: [id], onDelete: Restrict)
+  billerId          String
+  biller            Biller      @relation(fields: [billerId], references: [id], onDelete: Restrict)
+  transactionId     String      @unique
+  transaction       Transaction @relation(fields: [transactionId], references: [id], onDelete: Restrict)
+  /// Phone number, meter number or smartcard number.
+  customerReference String      @db.VarChar(120)
+  customerName      String?     @db.VarChar(120)
+  providerReference String?     @db.VarChar(120)
+  /// Prepaid meter token returned by the provider, when applicable.
+  token             String?     @db.VarChar(255)
+  paidAt            DateTime?   @db.Timestamptz(3)
+  createdAt         DateTime    @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime    @updatedAt @db.Timestamptz(3)
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([billerId, createdAt(sort: Desc)])
+  @@index([customerReference])
+  @@index([providerReference])
+}
+
+enum PaymentRequestStatus {
+  PENDING
+  ACCEPTED
+  PAID
+  DECLINED
+  CANCELLED
+  EXPIRED
+}
+
+model PaymentRequest {
+  id            String               @id @default(cuid())
+  reference     String               @unique @db.VarChar(40)
+  requesterId   String
+  requester     User                 @relation("PaymentRequestRequester", fields: [requesterId], references: [id], onDelete: Restrict)
+  /// Set when the payer is another NORTH user.
+  payerId       String?
+  payer         User?                @relation("PaymentRequestPayer", fields: [payerId], references: [id], onDelete: SetNull)
+  /// Set when the request is sent to a saved external recipient instead.
+  recipientId   String?
+  recipient     Recipient?           @relation(fields: [recipientId], references: [id], onDelete: SetNull)
+  transactionId String?              @unique
+  transaction   Transaction?         @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+  amount        BigInt
+  currency      String               @default("NGN") @db.VarChar(3)
+  note          String?              @db.VarChar(500)
+  status        PaymentRequestStatus @default(PENDING)
+  expiresAt     DateTime?            @db.Timestamptz(3)
+  paidAt        DateTime?            @db.Timestamptz(3)
+  createdAt     DateTime             @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime             @updatedAt @db.Timestamptz(3)
+
+  @@index([requesterId, status, createdAt(sort: Desc)])
+  @@index([payerId, status, createdAt(sort: Desc)])
+  @@index([recipientId])
+}
