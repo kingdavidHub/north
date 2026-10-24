@@ -3,3 +3,26 @@
 @import "tailwindcss/utilities.css";
 
 @import "nativewind/theme";
+
+@theme {
+  /* NORTH core palette extracted from the Figma screens */
+  --color-north-bg: #111413;
+  --color-north-surface: #1d211f;
+  --color-north-surface-raised: #272d29;
+  --color-north-border: #323a34;
+  --color-north-text: #fafcf6;
+  --color-north-muted: #a6b0a8;
+  --color-north-accent: #d4f77d;
+
+  /* Status colors used in the designs */
+  --color-north-danger: #f5a19a;
+  --color-north-warning: #f3c969;
+  --color-north-info: #7a92e7;
+
+  /* Inter is the only typeface used across the Figma screens */
+  --font-sans: "Inter_400Regular";
+  --font-inter-regular: "Inter_400Regular";
+  --font-inter-medium: "Inter_500Medium";
+  --font-inter-semibold: "Inter_600SemiBold";
+  --font-inter-bold: "Inter_700Bold";
+}
