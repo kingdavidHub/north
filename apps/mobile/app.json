@@ -26,6 +26,9 @@
     },
     "plugins": [
       "expo-router",
+      "@react-native-vector-icons/lucide",
+      "@react-native-vector-icons/fontawesome-free-brands",
+      "@react-native-vector-icons/fontawesome6",
       [
         "expo-splash-screen",
         {
