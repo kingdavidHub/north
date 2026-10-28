@@ -1,3 +1,4 @@
+import { useUser } from "@clerk/expo";
 import { StatusBar } from "expo-status-bar";
 import { ScrollView } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -8,10 +9,10 @@ import { HomeHeader } from "@/components/home/home-header";
 import { QuickActions } from "@/components/home/quick-actions";
 import { RecentActivity } from "@/components/home/recent-activity";
 import { SpendingPanel } from "@/components/home/spending-panel";
-import { useAppStore } from "@/store";
 
 export default function HomeScreen() {
-  const name = useAppStore((state) => state.user?.name ?? "");
+  const { user } = useUser();
+  const name = user?.firstName ?? user?.fullName ?? "";
 
   return (
     <SafeAreaView

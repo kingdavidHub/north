@@ -26,6 +26,8 @@
     },
     "plugins": [
       "expo-router",
+      "expo-secure-store",
+      "@clerk/expo",
       "@react-native-vector-icons/lucide",
       "@react-native-vector-icons/fontawesome-free-brands",
       "@react-native-vector-icons/fontawesome6",

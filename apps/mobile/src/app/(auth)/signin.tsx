@@ -1,3 +1,4 @@
+import { useSignIn } from "@clerk/expo";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { router } from "expo-router";
 import { useState } from "react";
@@ -15,7 +16,12 @@ import {
 import { PrimaryButton } from "@/components/auth/primary-button";
 import { TextField } from "@/components/auth/text-field";
 import { Lucide } from "@/icons";
-import { useAppStore } from "@/store";
+import { getClerkErrorMessage } from "@/lib/clerk";
+import {
+  hasValidPhoneLength,
+  PHONE_DIAL_CODE,
+  toE164PhoneNumber,
+} from "@/lib/phone";
 
 const signInSchema = z
   .object({
@@ -45,15 +51,13 @@ const signInSchema = z
       return;
     }
 
-    const digits = values.phone.replace(/\D/g, "");
-
-    if (!digits) {
+    if (!values.phone.replace(/\D/g, "")) {
       ctx.addIssue({
         code: "custom",
         path: ["phone"],
         message: "Enter your phone number",
       });
-    } else if (digits.length < 7 || digits.length > 15) {
+    } else if (!hasValidPhoneLength(values.phone)) {
       ctx.addIssue({
         code: "custom",
         path: ["phone"],
@@ -63,10 +67,16 @@ const signInSchema = z
   });
 
 type SignInValues = z.infer<typeof signInSchema>;
+type SecondFactor = "email_code" | "phone_code" | "totp";
 
 export default function SignInScreen() {
-  const setUser = useAppStore((state) => state.setUser);
+  const { signIn, errors: clerkErrors, fetchStatus } = useSignIn();
   const [method, setMethod] = useState<LoginMethod>("email");
+  const [formError, setFormError] = useState<string | null>(null);
+  const [secondFactor, setSecondFactor] = useState<SecondFactor | null>(null);
+  const [verificationTarget, setVerificationTarget] = useState("");
+  const [code, setCode] = useState("");
+  const [isVerifying, setIsVerifying] = useState(false);
 
   const {
     control,
@@ -85,35 +95,182 @@ export default function SignInScreen() {
     mode: "onTouched",
   });
 
+  const finishSignIn = async () => {
+    const { error } = await signIn.finalize();
+
+    if (error) {
+      setFormError(getClerkErrorMessage(error));
+      return;
+    }
+
+    router.replace("/(tabs)");
+  };
+
+  const startSecondFactor = async () => {
+    const emailFactor = signIn.supportedSecondFactors.find(
+      (factor) => factor.strategy === "email_code",
+    );
+    const phoneFactor = signIn.supportedSecondFactors.find(
+      (factor) => factor.strategy === "phone_code",
+    );
+    const totpFactor = signIn.supportedSecondFactors.find(
+      (factor) => factor.strategy === "totp",
+    );
+
+    if (emailFactor) {
+      const { error } = await signIn.mfa.sendEmailCode();
+
+      if (error) {
+        setFormError(getClerkErrorMessage(error));
+        return;
+      }
+
+      setSecondFactor("email_code");
+      setVerificationTarget(
+        signIn.identifier?.includes("@")
+          ? signIn.identifier
+          : "your email address",
+      );
+      return;
+    }
+
+    if (phoneFactor) {
+      const { error } = await signIn.mfa.sendPhoneCode();
+
+      if (error) {
+        setFormError(getClerkErrorMessage(error));
+        return;
+      }
+
+      setSecondFactor("phone_code");
+      setVerificationTarget("your phone number");
+      return;
+    }
+
+    if (totpFactor) {
+      setSecondFactor("totp");
+      setVerificationTarget("your authenticator app");
+      return;
+    }
+
+    setFormError(
+      "This account needs a verification method that isn't available in the app yet.",
+    );
+  };
+
+  const onSubmit = async (values: SignInValues) => {
+    setFormError(null);
+
+    const email = values.email.trim();
+    const phoneNumber = toE164PhoneNumber(values.phone);
+
+    const { error } = await signIn.password(
+      values.method === "email"
+        ? { emailAddress: email, password: values.password }
+        : { phoneNumber, password: values.password },
+    );
+
+    if (error) {
+      setFormError(getClerkErrorMessage(error));
+      return;
+    }
+
+    if (signIn.status === "complete") {
+      await finishSignIn();
+      return;
+    }
+
+    if (
+      signIn.status === "needs_second_factor" ||
+      signIn.status === "needs_client_trust"
+    ) {
+      await startSecondFactor();
+      return;
+    }
+
+    if (signIn.status === "needs_new_password") {
+      setFormError(
+        "Your password needs to be reset. Use “Forgot password?” to start over.",
+      );
+      return;
+    }
+
+    setFormError("We couldn't finish signing you in. Please try again.");
+  };
+
+  const onVerify = async () => {
+    if (!secondFactor || !code.trim()) {
+      return;
+    }
+
+    setIsVerifying(true);
+    setFormError(null);
+
+    try {
+      const normalizedCode = code.trim();
+      const { error } =
+        secondFactor === "email_code"
+          ? await signIn.mfa.verifyEmailCode({ code: normalizedCode })
+          : secondFactor === "phone_code"
+            ? await signIn.mfa.verifyPhoneCode({ code: normalizedCode })
+            : await signIn.mfa.verifyTOTP({ code: normalizedCode });
+
+      if (error) {
+        setFormError(getClerkErrorMessage(error));
+        return;
+      }
+
+      if (signIn.status === "complete") {
+        await finishSignIn();
+        return;
+      }
+
+      setFormError("That code didn't complete the sign-in. Please try again.");
+    } finally {
+      setIsVerifying(false);
+    }
+  };
+
+  const resendCode = async () => {
+    if (secondFactor !== "email_code" && secondFactor !== "phone_code") {
+      return;
+    }
+
+    setFormError(null);
+
+    const { error } =
+      secondFactor === "email_code"
+        ? await signIn.mfa.sendEmailCode()
+        : await signIn.mfa.sendPhoneCode();
+
+    if (error) {
+      setFormError(getClerkErrorMessage(error));
+      return;
+    }
+
+    Alert.alert("Code sent", "A new verification code is on its way.");
+  };
+
+  const resetSignIn = async () => {
+    await signIn.reset();
+    setSecondFactor(null);
+    setVerificationTarget("");
+    setCode("");
+    setFormError(null);
+  };
+
   const changeMethod = (nextMethod: LoginMethod) => {
     setMethod(nextMethod);
     setValue("method", nextMethod);
     clearErrors(["email", "phone"]);
-  };
-
-  const onSubmit = async (values: SignInValues) => {
-    // TODO: replace with the North API sign-in call once auth is available.
-    await new Promise((resolve) => setTimeout(resolve, 700));
-
-    const email = values.email.trim();
-    const phone = `+234${values.phone.replace(/\D/g, "").replace(/^0/, "")}`;
-
-    setUser({
-      id: "demo-user",
-      name:
-        values.method === "email"
-          ? (email.split("@")[0] ?? "North user")
-          : "North user",
-      email: values.method === "email" ? email : "",
-      phone: values.method === "phone" ? phone : undefined,
-    });
-    router.replace("/(tabs)");
+    setFormError(null);
+    void signIn.reset();
   };
 
   const showCountryCodes = () => {
     Alert.alert(
       "Country code",
-      "Only +234 (Nigeria) is available in this build.",
+      `Only ${PHONE_DIAL_CODE} (Nigeria) is available in this build.`,
     );
   };
 
@@ -123,6 +280,83 @@ export default function SignInScreen() {
       "Password reset will be available once the North API is connected.",
     );
   };
+
+  if (secondFactor) {
+    const isTotp = secondFactor === "totp";
+
+    return (
+      <AuthLayout header={<BrandMark />}>
+        <View className="mt-[74px]">
+          <Text className="font-inter-medium text-[34px] leading-[39px] text-north-text">
+            Verify it&apos;s you.
+          </Text>
+          <Text className="mt-3 font-inter-regular text-[14px] leading-[22px] text-north-muted">
+            {isTotp
+              ? "Enter the 6-digit code from your authenticator app."
+              : `We sent a 6-digit code to ${verificationTarget}.`}
+          </Text>
+        </View>
+
+        <View className="mt-8">
+          <TextField
+            label={isTotp ? "Authenticator code" : "Verification code"}
+            placeholder="Enter the 6-digit code"
+            keyboardType="number-pad"
+            autoComplete="one-time-code"
+            textContentType="oneTimeCode"
+            returnKeyType="go"
+            maxLength={6}
+            value={code}
+            onChangeText={setCode}
+            error={clerkErrors.fields.code?.message}
+            onSubmitEditing={() => {
+              void onVerify();
+            }}
+          />
+        </View>
+
+        {formError ? (
+          <Text className="mt-4 font-inter-regular text-[13px] leading-5 text-north-danger">
+            {formError}
+          </Text>
+        ) : null}
+
+        <View className="mt-6">
+          <PrimaryButton
+            label="Verify"
+            onPress={onVerify}
+            loading={isVerifying || fetchStatus === "fetching"}
+          />
+        </View>
+
+        <View className="mt-6 items-center gap-4">
+          {isTotp ? null : (
+            <Pressable
+              onPress={resendCode}
+              hitSlop={8}
+              accessibilityRole="button"
+            >
+              <Text className="font-inter-medium text-[13px] leading-[16px] text-north-accent">
+                Resend code
+              </Text>
+            </Pressable>
+          )}
+          <Pressable
+            onPress={resetSignIn}
+            hitSlop={8}
+            accessibilityRole="button"
+          >
+            <Text className="font-inter-regular text-[13px] leading-[16px] text-north-muted">
+              Use a different account
+            </Text>
+          </Pressable>
+        </View>
+      </AuthLayout>
+    );
+  }
+
+  const identifierError = clerkErrors.fields.identifier?.message;
+  const isBusy = isSubmitting || fetchStatus === "fetching";
 
   return (
     <AuthLayout
@@ -166,7 +400,7 @@ export default function SignInScreen() {
                 value={value}
                 onChangeText={onChange}
                 onBlur={onBlur}
-                error={errors.email?.message}
+                error={errors.email?.message ?? identifierError}
               />
             )}
           />
@@ -181,21 +415,20 @@ export default function SignInScreen() {
                 keyboardType="phone-pad"
                 autoComplete="tel"
                 textContentType="telephoneNumber"
-                // returnKeyType="next"
                 value={value}
                 onChangeText={onChange}
                 onBlur={onBlur}
-                error={errors.phone?.message}
+                error={errors.phone?.message ?? identifierError}
                 leading={
                   <View className="flex-row items-center gap-2">
                     <Text className="font-inter-regular text-[14px] text-north-text">
-                      +234
+                      {PHONE_DIAL_CODE}
                     </Text>
                     <Pressable
                       onPress={showCountryCodes}
                       hitSlop={8}
                       accessibilityRole="button"
-                      accessibilityLabel="Country code, Nigeria +234"
+                      accessibilityLabel={`Country code, Nigeria ${PHONE_DIAL_CODE}`}
                     >
                       <Lucide
                         name="chevron-down"
@@ -227,7 +460,7 @@ export default function SignInScreen() {
               value={value}
               onChangeText={onChange}
               onBlur={onBlur}
-              error={errors.password?.message}
+              error={errors.password?.message ?? clerkErrors.fields.password?.message}
               onSubmitEditing={() => {
                 void handleSubmit(onSubmit)();
               }}
@@ -235,6 +468,12 @@ export default function SignInScreen() {
           )}
         />
       </View>
+
+      {formError ? (
+        <Text className="mt-4 font-inter-regular text-[13px] leading-5 text-north-danger">
+          {formError}
+        </Text>
+      ) : null}
 
       <View className="items-end pb-8 pt-4">
         <Pressable
@@ -251,7 +490,7 @@ export default function SignInScreen() {
       <PrimaryButton
         label="Log in"
         onPress={handleSubmit(onSubmit)}
-        loading={isSubmitting}
+        loading={isBusy}
       />
     </AuthLayout>
   );

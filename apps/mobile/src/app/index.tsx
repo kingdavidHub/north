@@ -1,9 +1,17 @@
+import { useAuth } from "@clerk/expo";
 import { Redirect } from "expo-router";
-
-import { useAppStore } from "@/store";
+import { ActivityIndicator, View } from "react-native";
 
 export default function Index() {
-  const user = useAppStore((state) => state.user);
+  const { isLoaded, isSignedIn } = useAuth();
 
-  return <Redirect href={user ? "/(tabs)" : "/(auth)/welcome"} />;
+  if (!isLoaded) {
+    return (
+      <View style={{ flex: 1, backgroundColor: "#111413" }}>
+        <ActivityIndicator color="#d4f77d" style={{ flex: 1 }} />
+      </View>
+    );
+  }
+
+  return <Redirect href={isSignedIn ? "/(tabs)" : "/(auth)/welcome"} />;
 }
