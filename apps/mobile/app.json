@@ -4,11 +4,14 @@
     "slug": "north",
     "version": "1.0.0",
     "orientation": "portrait",
+    "backgroundColor": "#111413",
     "icon": "./assets/images/icon.png",
     "scheme": "north",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon"
+      "icon": "./assets/expo.icon",
+      "bundleIdentifier": "com.north.mobile",
+      "appleTeamId": "RT4L2ZL3Z2"
     },
     "android": {
       "adaptiveIcon": {

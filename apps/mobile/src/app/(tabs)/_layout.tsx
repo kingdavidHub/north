@@ -1,5 +1,4 @@
-import { useAuth } from "@clerk/expo";
-import { Redirect, Tabs } from "expo-router";
+import { Tabs } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { Lucide } from "@/icons";
@@ -8,16 +7,7 @@ const ACTIVE_TINT = "#d4f77d";
 const INACTIVE_TINT = "#a6b0a8";
 
 export default function TabsLayout() {
-  const { isLoaded, isSignedIn } = useAuth();
   const insets = useSafeAreaInsets();
-
-  if (!isLoaded) {
-    return null;
-  }
-
-  if (!isSignedIn) {
-    return <Redirect href="/(auth)/welcome" />;
-  }
 
   return (
     <Tabs

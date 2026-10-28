@@ -22,7 +22,7 @@ export default function ProfileScreen() {
 
     try {
       await signOut();
-      router.replace("/(auth)/welcome");
+      router.replace("/(auth)");
     } catch (error) {
       Alert.alert(
         "Couldn't sign out",
