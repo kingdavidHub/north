@@ -1,15 +1,70 @@
-export const PHONE_DIAL_CODE = "+234";
+const PHONE_COUNTRY_CODE = "234";
 
-export function toE164PhoneNumber(value: string): string {
-  const nationalNumber = value.replace(/\D/g, "").replace(/^0+/, "");
+export const PHONE_DIAL_CODE = `+${PHONE_COUNTRY_CODE}`;
+
+function withNigeriaCountryCode(digits: string): string {
+  const nationalNumber = digits
+    .slice(PHONE_COUNTRY_CODE.length)
+    .replace(/^0+/, "");
 
   return nationalNumber ? `${PHONE_DIAL_CODE}${nationalNumber}` : "";
 }
 
-export function hasValidPhoneLength(value: string): boolean {
-  const digits = value.replace(/\D/g, "");
+/**
+ * Converts a Nigerian national number to E.164 while preserving numbers that
+ * already include an explicit country code (`+234...`, `00234...`, `234...`).
+ * This keeps pasted E.164 numbers from being prefixed twice.
+ */
+export function toE164PhoneNumber(value: string): string {
+  const trimmed = value.trim();
 
-  return digits.length >= 7 && digits.length <= 15;
+  if (!trimmed) {
+    return "";
+  }
+
+  const digits = trimmed.replace(/\D/g, "");
+
+  if (!digits) {
+    return "";
+  }
+
+  if (trimmed.startsWith("+")) {
+    return digits.startsWith(PHONE_COUNTRY_CODE)
+      ? withNigeriaCountryCode(digits)
+      : `+${digits}`;
+  }
+
+  if (trimmed.startsWith("00")) {
+    const internationalDigits = digits.slice(2);
+
+    return internationalDigits.startsWith(PHONE_COUNTRY_CODE)
+      ? withNigeriaCountryCode(internationalDigits)
+      : `+${internationalDigits}`;
+  }
+
+  const nationalNumber = digits.replace(/^0+/, "");
+
+  if (!nationalNumber) {
+    return "";
+  }
+
+  if (nationalNumber.startsWith(PHONE_COUNTRY_CODE)) {
+    return withNigeriaCountryCode(nationalNumber);
+  }
+
+  return `${PHONE_DIAL_CODE}${nationalNumber}`;
+}
+
+export function hasValidPhoneLength(value: string): boolean {
+  const rawDigits = value.replace(/\D/g, "");
+
+  if (rawDigits.length < 7) {
+    return false;
+  }
+
+  const e164Digits = toE164PhoneNumber(value).replace(/\D/g, "");
+
+  return e164Digits.length >= 7 && e164Digits.length <= 15;
 }
 
 export function splitFullName(fullName: string): {

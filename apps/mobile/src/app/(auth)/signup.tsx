@@ -92,15 +92,21 @@ export default function SignUpScreen() {
     router.replace("/(tabs)");
   };
 
+  const completeSignUpIfReady = async () => {
+    if (signUp.status !== "complete") {
+      return false;
+    }
+
+    await finishSignUp();
+    return true;
+  };
+
   const onSubmit = async (values: SignUpValues) => {
     setFormError(null);
     setPhoneVerificationSkipped(false);
 
     const { firstName, lastName } = splitFullName(values.name);
     const enteredPhone = values.phone ? toE164PhoneNumber(values.phone) : null;
-    let phoneNumber = enteredPhone;
-
-    setVerificationPhone(phoneNumber);
 
     const submit = (candidatePhone: string | null) =>
       signUp.password({
@@ -116,6 +122,17 @@ export default function SignUpScreen() {
         lastName,
       });
 
+    const retryWithEmailOnly = async () => {
+      await signUp.reset();
+      setVerificationPhone(null);
+      setPhoneVerificationSkipped(true);
+
+      return submit(null);
+    };
+
+    let phoneNumber = enteredPhone;
+    setVerificationPhone(phoneNumber);
+
     let { error } = await submit(phoneNumber);
 
     // Clerk rejects SMS to unsupported countries. Keep the number for later
@@ -125,12 +142,8 @@ export default function SignUpScreen() {
         console.warn("[Clerk] phone country unsupported; verifying email only");
       }
 
-      await signUp.reset();
       phoneNumber = null;
-      setVerificationPhone(null);
-      setPhoneVerificationSkipped(true);
-
-      ({ error } = await submit(null));
+      ({ error } = await retryWithEmailOnly());
     }
 
     if (error) {
@@ -142,8 +155,7 @@ export default function SignUpScreen() {
       return;
     }
 
-    if (signUp.status === "complete") {
-      await finishSignUp();
+    if (await completeSignUpIfReady()) {
       return;
     }
 
@@ -170,12 +182,52 @@ export default function SignUpScreen() {
       }
     }
 
-    if (needsPhoneCode) {
-      const { error: sendError } = await signUp.verifications.sendPhoneCode();
+    if (!needsPhoneCode) {
+      return;
+    }
 
-      if (sendError) {
-        setFormError(getClerkErrorMessage(sendError));
-      }
+    const { error: phoneSendError } =
+      await signUp.verifications.sendPhoneCode();
+
+    if (!phoneSendError) {
+      return;
+    }
+
+    // Asking for a code that was never sent would leave the user stuck on the
+    // verify screen. Recreate the sign-up without the phone and send a fresh
+    // email code for the new attempt.
+    if (__DEV__) {
+      console.warn(
+        "[Clerk] phone code send failed; verifying email only",
+        phoneSendError,
+      );
+    }
+
+    const { error: retryError } = await retryWithEmailOnly();
+
+    if (retryError) {
+      setFormError(getClerkErrorMessage(retryError));
+      setStep("form");
+      return;
+    }
+
+    if (await completeSignUpIfReady()) {
+      return;
+    }
+
+    if (!signUp.unverifiedFields.includes("email_address")) {
+      setFormError(
+        "We couldn't finish creating your account. Please try again.",
+      );
+      setStep("form");
+      return;
+    }
+
+    const { error: emailSendError } =
+      await signUp.verifications.sendEmailCode();
+
+    if (emailSendError) {
+      setFormError(getClerkErrorMessage(emailSendError));
     }
   };
 
