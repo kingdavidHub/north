@@ -1,23 +1,43 @@
-import { FontAwesome6, Lucide } from "@/icons"
 import { Tabs } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+
+import { Lucide } from "@/icons";
+
+const ACTIVE_TINT = "#d4f77d";
+const INACTIVE_TINT = "#a6b0a8";
 
 export default function TabsLayout() {
+  const insets = useSafeAreaInsets();
+
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: "#208AEF",
-        tabBarInactiveTintColor: "#8E8E93",
-        tabBarLabelStyle: { fontSize: 12, fontWeight: "600" },
-        tabBarStyle: { backgroundColor: "#FFFFFF", borderTopColor: "#E5E7EB" },
+        tabBarActiveTintColor: ACTIVE_TINT,
+        tabBarInactiveTintColor: INACTIVE_TINT,
+        tabBarStyle: {
+          backgroundColor: "#111413",
+          borderTopColor: "#323a34",
+          borderTopWidth: 1,
+          height: 72 + insets.bottom,
+          paddingTop: 12,
+          paddingBottom: insets.bottom + 6,
+        },
+        tabBarItemStyle: { padding: 0, justifyContent: "center" },
+        tabBarLabelStyle: {
+          fontFamily: "Inter_400Regular",
+          fontSize: 11,
+          lineHeight: 13.3,
+          marginTop: 3,
+        },
       }}
     >
       <Tabs.Screen
         name="index"
         options={{
           title: "Home",
-          tabBarIcon: ({ color, size }) => (
-            <FontAwesome6 iconStyle="solid" name="house" size={size} color={color} />
+          tabBarIcon: ({ color }) => (
+            <Lucide name="house" size={21} color={color} />
           ),
         }}
       />
@@ -25,12 +45,8 @@ export default function TabsLayout() {
         name="activity"
         options={{
           title: "Activity",
-          tabBarIcon: ({ color, size }) => (
-            <Lucide
-              name="activity"
-              size={size}
-              color={color}
-            />
+          tabBarIcon: ({ color }) => (
+            <Lucide name="activity" size={21} color={color} />
           ),
         }}
       />
@@ -38,12 +54,8 @@ export default function TabsLayout() {
         name="cards"
         options={{
           title: "Cards",
-          tabBarIcon: ({ color, size }) => (
-            <Lucide
-              name="credit-card"
-              size={size}
-              color={color}
-            />
+          tabBarIcon: ({ color }) => (
+            <Lucide name="credit-card" size={21} color={color} />
           ),
         }}
       />
@@ -51,12 +63,8 @@ export default function TabsLayout() {
         name="profile"
         options={{
           title: "Profile",
-          tabBarIcon: ({ color, size }) => (
-            <Lucide
-              name="user-round"
-              size={size}
-              color={color}
-            />
+          tabBarIcon: ({ color }) => (
+            <Lucide name="user-round" size={21} color={color} />
           ),
         }}
       />
