@@ -147,6 +147,57 @@ if (typeof windowObject.removeEventListener !== "function") {
 const windowRecord = windowObject as unknown as Record<string, unknown>;
 const cookieJar = new Map<string, string>();
 
+/**
+ * Defining `document` makes Clerk treat the runtime as a browser, so it also
+ * reads `window.location` (domain/proxy resolution, satellite detection, …).
+ * React Native has no `location`, which crashed the release build with
+ * "Cannot read property 'href' of undefined". Keep a minimal, stable location
+ * that matches the document base URI.
+ */
+if (typeof windowRecord.location === "undefined") {
+  const locationUrl = new URL("http://localhost/");
+  const nativeLocation: Record<string, unknown> = {};
+
+  for (const field of [
+    "href",
+    "origin",
+    "protocol",
+    "host",
+    "hostname",
+    "port",
+    "pathname",
+    "search",
+    "hash",
+  ] as const) {
+    Object.defineProperty(nativeLocation, field, {
+      configurable: true,
+      enumerable: true,
+      get: () => locationUrl[field],
+      ...(field === "href"
+        ? {
+            set: (value: string) => {
+              locationUrl.href = value;
+            },
+          }
+        : {}),
+    });
+  }
+
+  nativeLocation.assign = (value: string) => {
+    locationUrl.href = value;
+  };
+  nativeLocation.replace = (value: string) => {
+    locationUrl.href = value;
+  };
+  nativeLocation.reload = () => {};
+  nativeLocation.toString = () => locationUrl.href;
+
+  Object.defineProperty(windowObject, "location", {
+    configurable: true,
+    value: nativeLocation,
+  });
+}
+
 const documentObject: Record<string, unknown> = {
   addEventListener: () => {},
   removeEventListener: () => {},
