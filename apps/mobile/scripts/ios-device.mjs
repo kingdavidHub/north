@@ -42,11 +42,21 @@ function run(command, args) {
 }
 
 function getPhysicalDevices() {
-  const output = JSON.parse(
-    execFileSync("xcrun", ["devicectl", "list", "devices", "--json-output", "-"], {
-      encoding: "utf8",
-    }),
-  );
+  let output;
+  try {
+    output = JSON.parse(
+      execFileSync("xcrun", ["devicectl", "list", "devices", "--json-output", "-"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }),
+    );
+  } catch {
+    fail(
+      "Could not query CoreDevice for connected devices.\n" +
+        "Make sure Xcode is installed and selected with `xcode-select -p`.",
+    );
+  }
+
   const devices = output.result?.devices ?? [];
 
   return devices.flatMap((entry) => {
@@ -76,22 +86,43 @@ function getPhysicalDevices() {
   });
 }
 
-function getConnectedUdids() {
+function isDeviceConnected(udid) {
   try {
-    const output = execFileSync("xcrun", ["xctrace", "list", "devices"], {
-      encoding: "utf8",
-    });
-    // Devices listed before the "Devices Offline" heading are currently reachable.
-    const connectedSection =
-      output.split("== Devices ==")[1]?.split("== Devices Offline ==")[0] ?? "";
-    const udids = new Set();
-    for (const match of connectedSection.matchAll(/\(([0-9A-F-]{25,})\)/g)) {
-      udids.add(match[1]);
-    }
-    return udids;
+    // `devicectl list` can report a paired, wired iPhone as disconnected even
+    // when CoreDevice can reach it. The detail query opens the device session,
+    // so it is the reliable check for build/install readiness.
+    const output = JSON.parse(
+      execFileSync(
+        "xcrun",
+        [
+          "devicectl",
+          "device",
+          "info",
+          "details",
+          "--device",
+          udid,
+          "--json-output",
+          "-",
+          "--timeout",
+          "10",
+        ],
+        {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "ignore"],
+          timeout: 30_000,
+        },
+      ),
+    );
+    const connection =
+      output.result?.properties?.connection ??
+      output.result?.connectionProperties ??
+      {};
+    return (
+      connection.state === "connected" ||
+      connection.tunnelState === "connected"
+    );
   } catch {
-    // If xctrace cannot run, fall back to devicectl's pairing state.
-    return null;
+    return false;
   }
 }
 
@@ -105,16 +136,13 @@ if (devices.length === 0) {
   );
 }
 
-const connectedUdids = getConnectedUdids();
-if (connectedUdids) {
-  devices = devices.filter((device) => connectedUdids.has(device.udid));
-  if (devices.length === 0) {
-    fail(
-      "Your iPhone is paired but not connected.\n" +
-        "Plug it in with a cable and unlock it, then run `yarn ios:build` again.\n" +
-        "Nothing was built or installed on the simulator.",
-    );
-  }
+devices = devices.filter((device) => isDeviceConnected(device.udid));
+if (devices.length === 0) {
+  fail(
+    "Your iPhone is paired but not connected.\n" +
+      "Plug it in with a cable and unlock it, then run `yarn ios:build` again.\n" +
+      "Nothing was built or installed on the simulator.",
+  );
 }
 
 const requestedDevice = process.env.IOS_DEVICE;
@@ -188,7 +216,9 @@ if (!process.env.KEEP_ENTITLEMENTS && existsSync(entitlementsPath)) {
     );
     run("plutil", [
       "-remove",
-      "com.apple.developer.applesignin",
+      // plutil treats dots as key-path separators, so the entitlement key
+      // must be escaped to remove this single top-level key.
+      "com\\.apple\\.developer\\.applesignin",
       entitlementsPath,
     ]);
   }

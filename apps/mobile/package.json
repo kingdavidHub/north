@@ -70,7 +70,7 @@
   "scripts": {
     "start": "expo start",
     "reset-project": "node ./scripts/reset-project.js",
-    "android": "expo start --android",
+    "android": "expo start --android --go",
     "ios": "REACT_NATIVE_PACKAGER_HOSTNAME=127.0.0.1 expo start --go --ios",
     "ios:build": "node ./scripts/ios-device.mjs",
     "web": "expo start --web",
