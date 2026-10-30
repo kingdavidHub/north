@@ -35,6 +35,11 @@ yarn-error.*
 .env.*
 !.env.example
 
+# local tooling (MCP config, Basalt preview injection)
+.mcp.json
+apps/mobile/.basalt/
+apps/mobile/babel.config.js
+
 # Prisma generated client
 apps/api/src/generated/
 
