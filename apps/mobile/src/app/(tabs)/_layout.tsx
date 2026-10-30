@@ -30,6 +30,7 @@ export default function TabsLayout() {
           lineHeight: 13.3,
           marginTop: 3,
         },
+        animation: "fade"
       }}
     >
       <Tabs.Screen

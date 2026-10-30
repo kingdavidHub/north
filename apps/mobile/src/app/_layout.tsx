@@ -1,5 +1,4 @@
 import "../global.css";
-import "@/lib/clerk-webcrypto";
 
 import { ClerkProvider, useAuth } from "@clerk/expo";
 import { tokenCache } from "@clerk/expo/token-cache";
@@ -45,6 +44,7 @@ function RootNavigator() {
         screenOptions={{
           headerShown: false,
           contentStyle: { backgroundColor: "#111413" }, // matches splash bg
+          animation: "fade"
         }}
       >
         <Stack.Protected guard={!!isSignedIn}>

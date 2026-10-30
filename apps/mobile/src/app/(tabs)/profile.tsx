@@ -15,14 +15,13 @@ import { getClerkErrorMessage } from "@/lib/clerk";
 export default function ProfileScreen() {
   const { user } = useUser();
   const { signOut } = useClerk();
-  const [isSigningOut, setIsSigningOut] = useState(false);
+  const [isSigningOut, setIsSigningOut] = useState<boolean>(false);
 
   const handleSignOut = async () => {
     setIsSigningOut(true);
 
     try {
       await signOut();
-      router.replace("/(auth)");
     } catch (error) {
       Alert.alert(
         "Couldn't sign out",
