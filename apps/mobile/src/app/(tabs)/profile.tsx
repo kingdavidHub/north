@@ -1,15 +1,14 @@
 import { useClerk, useUser } from "@clerk/expo";
-import { router } from "expo-router";
+import Constants from "expo-constants";
+import { StatusBar } from "expo-status-bar";
 import { useState } from "react";
-import {
-  ActivityIndicator,
-  Alert,
-  Pressable,
-  Text,
-  View,
-} from "react-native";
+import { Alert, ScrollView, Text, View } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 
-import { Screen } from "@/components/screen";
+import { ProfileHeader } from "@/components/profile/profile-header";
+import { ProfileIdentity } from "@/components/profile/profile-identity";
+import { ProfileMenu } from "@/components/profile/profile-menu";
+import { SignOutButton } from "@/components/profile/sign-out-button";
 import { getClerkErrorMessage } from "@/lib/clerk";
 
 export default function ProfileScreen() {
@@ -33,27 +32,42 @@ export default function ProfileScreen() {
   };
 
   const name = user?.fullName ?? user?.firstName ?? "Guest";
-  const email = user?.primaryEmailAddress?.emailAddress;
+  const email =
+    user?.primaryEmailAddress?.emailAddress ??
+    user?.primaryPhoneNumber?.phoneNumber;
+  const version = Constants.expoConfig?.version ?? "1.0.0";
 
   return (
-    <Screen>
-      <View className="flex-1 gap-2 px-6 pt-6">
-        <Text className="text-3xl font-bold text-zinc-900">Profile</Text>
-        <Text className="text-base text-zinc-500">{name}</Text>
-        {email ? <Text className="text-sm text-zinc-400">{email}</Text> : null}
+    <SafeAreaView
+      edges={["top", "left", "right"]}
+      style={{ flex: 1, backgroundColor: "#111413" }}
+    >
+      <StatusBar style="light" />
+      <ScrollView
+        className="flex-1"
+        contentContainerStyle={{
+          paddingBottom: 24,
+          paddingHorizontal: 20,
+          paddingTop: 20,
+        }}
+        showsVerticalScrollIndicator={false}
+      >
+        <ProfileHeader />
 
-        <Pressable
-          onPress={handleSignOut}
-          disabled={isSigningOut}
-          accessibilityRole="button"
-          accessibilityLabel="Sign out"
-          accessibilityState={{ busy: isSigningOut, disabled: isSigningOut }}
-          className="mt-6 h-12 flex-row items-center justify-center gap-2 rounded-xl bg-zinc-900 active:opacity-85"
-        >
-          {isSigningOut ? <ActivityIndicator color="#ffffff" /> : null}
-          <Text className="text-sm font-semibold text-white">Sign out</Text>
-        </Pressable>
-      </View>
-    </Screen>
+        <View className="mt-4">
+          <ProfileIdentity name={name} email={email} />
+        </View>
+
+        <View className="mt-6">
+          <ProfileMenu />
+        </View>
+
+        <SignOutButton onPress={handleSignOut} loading={isSigningOut} />
+
+        <Text className="mt-5 text-center font-inter-regular text-[10px] leading-[12px] text-north-muted">
+          North version {version}
+        </Text>
+      </ScrollView>
+    </SafeAreaView>
   );
 }
