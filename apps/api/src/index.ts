@@ -1,40 +1,51 @@
 import "dotenv/config";
-import express from "express";
-import cors from "cors";
-import { UserSchema, type User } from "@north/shared";
+import { createApp } from "./app.ts";
+import { registerGlobalErrorHandlers } from "./errors/index.ts";
+import { prisma } from "./lib/prisma.ts";
 
-const app = express();
 const port = Number(process.env.PORT) || 4000;
+const app = createApp();
 
-app.use(cors());
-app.use(express.json());
-
-app.get("/health", (_req, res) => {
-  res.json({
-    status: "ok",
-    service: "north-api",
-    timestamp: new Date().toISOString(),
-  });
+const server = app.listen(port, () => {
+  console.log(`North API running at http://localhost:${port}`);
 });
 
-app.post("/users/validate", (req, res) => {
-  const result = UserSchema.safeParse(req.body);
+let isShuttingDown = false;
 
-  if (!result.success) {
-    return res.status(400).json({
-      error: "Invalid user data",
-      details: result.error.issues,
-    });
+/**
+ * Stops accepting connections, disconnects Prisma and exits. Forced out after
+ * 10s so a stuck connection cannot keep the process alive forever.
+ */
+function shutdown(reason: string, exitCode = 0): void {
+  if (isShuttingDown) {
+    console.warn(`[north-api] Received ${reason} while shutting down; exiting immediately.`);
+    process.exit(exitCode || 1);
   }
 
-  const user: User = result.data;
+  isShuttingDown = true;
 
-  return res.json({
-    message: "User data is valid",
-    user,
+  console.log(`[north-api] Shutting down (${reason})...`);
+
+  const forceExit = setTimeout(() => {
+    console.error("[north-api] Forced shutdown after timeout.");
+    process.exit(exitCode || 1);
+  }, 10_000);
+  forceExit.unref();
+
+  server.close(() => {
+    void prisma
+      .$disconnect()
+      .catch((error: unknown) => {
+        console.error("[north-api] Failed to disconnect Prisma:", error);
+      })
+      .finally(() => process.exit(exitCode));
   });
-});
+}
 
-app.listen(port, () => {
-  console.log(`North API running at http://localhost:${port}`);
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+
+// Errors that escape Express entirely: log, then shut down cleanly.
+registerGlobalErrorHandlers((_error, origin) => {
+  shutdown(origin, 1);
 });

@@ -4,11 +4,14 @@
     "slug": "north",
     "version": "1.0.0",
     "orientation": "portrait",
+    "backgroundColor": "#111413",
     "icon": "./assets/images/icon.png",
     "scheme": "north",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon"
+      "icon": "./assets/expo.icon",
+      "bundleIdentifier": "com.north.mobile",
+      "appleTeamId": "RT4L2ZL3Z2"
     },
     "android": {
       "adaptiveIcon": {
@@ -26,12 +29,18 @@
     },
     "plugins": [
       "expo-router",
+      "expo-secure-store",
+      "@clerk/expo",
+      "@react-native-vector-icons/lucide",
+      "@react-native-vector-icons/fontawesome-free-brands",
+      "@react-native-vector-icons/fontawesome6",
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#208AEF",
-          "image": "./assets/images/splash-icon.png",
-          "imageWidth": 76
+          "backgroundColor": "#111413",
+          "image": "./assets/images/north-splash.png",
+          "imageWidth": 190,
+          "resizeMode": "contain"
         }
       ]
     ],

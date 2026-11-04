@@ -12,6 +12,7 @@
   "scripts": {
     "dev:mobile": "yarn workspace @north/mobile start",
     "ios": "yarn workspace @north/mobile ios",
+    "ios:build": "yarn workspace @north/mobile ios:build",
     "android": "yarn workspace @north/mobile android",
     "lint:mobile": "yarn workspace @north/mobile lint",
     "dev:web": "yarn workspace @north/web dev",
